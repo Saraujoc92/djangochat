@@ -9,6 +9,7 @@ from django.core import serializers
 import markdown
 import bleach
 import re
+
 from django.conf import settings
 from django.urls import reverse
 from channels_presence.models import Room
@@ -16,7 +17,14 @@ from channels_presence.decorators import touch_presence
 
 from django.dispatch import receiver
 from channels_presence.signals import presence_changed
-from channels import Group
+
+import redis
+import threading
+import time
+
+redis_thread = None
+r = redis.Redis(host='localhost', port=6379)
+
 
 @channel_session_user_from_http
 def chat_connect(message):
@@ -24,20 +32,50 @@ def chat_connect(message):
     Room.objects.add("all", message.reply_channel.name, message.user)
     message.reply_channel.send({"accept": True})
 
+
+def _listen_for_messages():
+    p = r.pubsub()
+
+    p.subscribe('message')
+    received_response = False
+    while True:
+        message = p.get_message()
+        if message:
+            data = message['data']
+            try:
+                Group("all").send({'text': data.decode('utf-8')})
+            except:
+                pass
+        time.sleep(0.1)
+
+
 @touch_presence
 @channel_session_user
 def chat_receive(message):
+
+    global redis_thread
+    if not redis_thread:
+        redis_thread = threading.Thread(target=_listen_for_messages)
+        redis_thread.daemon = True
+        redis_thread.start()
+
     data = json.loads(message['text'])
     if not data['message']:
         return
     if not message.user.is_authenticated:
         return
-    current_message = escape(data['message'])
+    raw_message = (escape(data['message'])).strip()
+    current_message = raw_message
+
+    isCommand = current_message.startswith('/')
+    if isCommand:
+        current_message = '<b>' + current_message
+
     urlRegex = re.compile(
-            u'(?isu)(\\b(?:https?://|www\\d{0,3}[.]|[a-z0-9.\\-]+[.][a-z]{2,4}/)[^\\s()<'
-            u'>\\[\\]]+[^\\s`!()\\[\\]{};:\'".,<>?\xab\xbb\u201c\u201d\u2018\u2019])'
-        )
-    
+        u'(?isu)(\\b(?:https?://|www\\d{0,3}[.]|[a-z0-9.\\-]+[.][a-z]{2,4}/)[^\\s()<'
+        u'>\\[\\]]+[^\\s`!()\\[\\]{};:\'".,<>?\xab\xbb\u201c\u201d\u2018\u2019])'
+    )
+
     processed_urls = list()
     for obj in urlRegex.finditer(current_message):
         old_url = obj.group(0)
@@ -49,22 +87,31 @@ def chat_receive(message):
             new_url = 'http://' + new_url
         new_url = '<a href="' + new_url + '">' + new_url + "</a>"
         current_message = current_message.replace(old_url, new_url)
-    m = ChatMessage(user=message.user, message=data['message'], message_html=current_message)
-    m.save()
+    m = ChatMessage(user=message.user,
+                    message=data['message'],
+                    message_html=current_message)
 
-    my_dict = {'user' : m.user.username, 'message' : current_message}
+    my_dict = {'user': m.user.username, 'message': current_message}
     Group("all").send({'text': json.dumps(my_dict)})
+
+    if isCommand:
+        r.publish('command', raw_message)
+    else:
+        m.save()
+
 
 @channel_session_user
 def chat_disconnect(message):
     Group("all").discard(message.reply_channel)
     Room.objects.remove("all", message.reply_channel.name)
 
+
 @receiver(presence_changed)
 def broadcast_presence(sender, room, **kwargs):
     # Broadcast the new list of present users to the room.
     Group(room.channel_name).send({
-        'text': json.dumps({
+        'text':
+        json.dumps({
             'type': 'presence',
             'payload': {
                 'channel_name': room.channel_name,
@@ -74,23 +121,27 @@ def broadcast_presence(sender, room, **kwargs):
         })
     })
 
+
 @channel_session_user_from_http
 def loadhistory_connect(message):
     message.reply_channel.send({"accept": True})
 
+
 @channel_session_user
 def loadhistory_receive(message):
     data = json.loads(message['text'])
-    chat_queryset = ChatMessage.objects.filter(id__lte=data['last_message_id']).order_by("-created")[:10]
+    chat_queryset = ChatMessage.objects.filter(
+        id__lte=data['last_message_id']).order_by("-created")[:15]
     chat_message_count = len(chat_queryset)
-    if chat_message_count > 0:
-        first_message_id = chat_queryset[len(chat_queryset)-1].id
+    if chat_message_count > 0 and chat_message_count < 50:
+        first_message_id = chat_queryset[len(chat_queryset) - 1].id
     else:
         first_message_id = -1
     previous_id = -1
     if first_message_id != -1:
         try:
-            previous_id = ChatMessage.objects.filter(pk__lt=first_message_id).order_by("-pk")[:1][0].id
+            previous_id = ChatMessage.objects.filter(
+                pk__lt=first_message_id).order_by("-pk")[:1][0].id
         except IndexError:
             previous_id = -1
 
@@ -98,11 +149,12 @@ def loadhistory_receive(message):
     cleaned_chat_messages = list()
     for item in chat_messages:
         current_message = item.message_html
-        cleaned_item = {'user' : item.user.username, 'message' : current_message }
+        cleaned_item = {'user': item.user.username, 'message': current_message}
         cleaned_chat_messages.append(cleaned_item)
 
-    my_dict = { 'messages' : cleaned_chat_messages, 'previous_id' : previous_id }
+    my_dict = {'messages': cleaned_chat_messages, 'previous_id': previous_id}
     message.reply_channel.send({'text': json.dumps(my_dict)})
+
 
 @channel_session_user
 def loadhistory_disconnect(message):

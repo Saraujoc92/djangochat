@@ -1,22 +1,10 @@
-# Django Chat
+# Python Challenge
 
-This is a simple chat room built using Django Channels.
+This is the answer to the Python Challenge built upon a simple chat room built using Django Channels ([original repo](https://github.com/ploggingdev/djangochat)).
 
-Setup instructions on Ubuntu 16.04:
+It consists of a chatroom where commands can be written. A `command` is any message that starts with a `/`.
 
-Follow this [guide](https://www.digitalocean.com/community/tutorials/initial-server-setup-with-ubuntu-16-04) for the initial server setup.
-
-Update package index :
-
-```
-sudo apt-get update
-```
-
-Install dependencies :
-
-```
-sudo apt-get install python3-pip python3-dev libpq-dev postgresql postgresql-contrib nginx
-```
+## Setup instructions:
 
 Database setup :
 
@@ -61,7 +49,8 @@ pip install --upgrade pip
 Add environment variables :
 
 ```
-sudo nano ~/.bashrc
+sudo vim ~/.bashrc
+# or ~/.zshrc
 
 #append the following to the end of the file
 
@@ -105,8 +94,9 @@ python manage.py createsuperuser
 Start the development server :
 
 ```
-python manage.py runserver
+python manage.py runserver --noreload
 ```
+The `noreload` flag is used to avoid duplicated instances of the singletons due to Django running twice.
 
 Start celery :
 

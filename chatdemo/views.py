@@ -17,10 +17,10 @@ from .models import ChatMessage
 class IndexView(generic.View):
 
     def get(self, request):
-        # We want to show the last 10 messages, ordered most-recent-last
-        chat_queryset = ChatMessage.objects.order_by("-created")[:10]
+        # We want to show the last 15 messages, ordered most-recent-last
+        chat_queryset = ChatMessage.objects.order_by("-created")[:15]
         chat_message_count = len(chat_queryset)
-        if chat_message_count > 0:
+        if chat_message_count > 0 and chat_message_count < 50:
             first_message_id = chat_queryset[len(chat_queryset)-1].id
         else:
             first_message_id = -1
